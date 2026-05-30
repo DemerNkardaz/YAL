@@ -40,6 +40,7 @@ done                = "Установлено в: {path}"
 
 [config]
 no-config        = "yal.toml не найден — шаблон будет скопирован без настройки."
+target-not-found = "Ошибка: целевой файл {path} не найден."
 field-required   = "Поле обязательно."
 field-select-hint = "Введите один из вариантов: {options}"
 field-invalid-option = "Недопустимый вариант. Доступные: {options}"

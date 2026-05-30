@@ -31,8 +31,8 @@ def run(args: argparse.Namespace) -> None:
 
     try:
         entry = get_entry(kind, name)
-    except ValueError as e:
-        print(f"[yal] {e}")
+    except ValueError:
+        print(f"[yal] {t('errors.unknown-template', name=name, kind=kind, available=', '.join(list_kinds()))}")
         sys.exit(1)
 
     try:

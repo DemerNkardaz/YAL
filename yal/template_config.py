@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import io
 import re
 import sys
 from dataclasses import dataclass, field as dc_field
@@ -20,8 +21,29 @@ else:
         import tomli as tomllib  # type: ignore[no-redef]
 
 from yal.i18n import t, current_lang
+from yal import generators
 
 YAL_TOML = "yal.toml"
+
+# ─── защита \uXXXX при round-trip чтении/записи YAML ─────────────────────────
+# ruamel.yaml раскрывает \uXXXX → символ ещё на этапе load().
+# Чтобы сохранить исходные escape-последовательности, временно заменяем их
+# на заглушки из Unicode Private Use Area (U+E000–U+E001), которые ruamel
+# пропускает как есть, а после dump() восстанавливаем обратно.
+
+_YAML_UESC_RE = re.compile(r'\\u([0-9a-fA-F]{4})')
+_YAML_PLACEHOLDER_RE = re.compile(r'\uE000UESC([0-9a-fA-F]{4})\uE001')
+
+
+def _protect_unicode_escapes(text: str) -> str:
+    """Заменяет \\uXXXX → <PUA>UESCXXXX<PUA> чтобы ruamel не раскрывал их."""
+    return _YAML_UESC_RE.sub(lambda m: f'\uE000UESC{m.group(1)}\uE001', text)
+
+
+def _restore_unicode_escapes(text: str) -> str:
+    """Обратная замена: <PUA>UESCXXXX<PUA> → \\uXXXX."""
+    return _YAML_PLACEHOLDER_RE.sub(lambda m: f'\\u{m.group(1)}', text)
+
 
 # Настройка парсера для "Round-trip" (сохранение структуры)
 yaml_parser = YAML()
@@ -54,8 +76,9 @@ class FieldDef:
 
 @dataclass
 class TargetFieldMapping:
-    field: str
     key: str
+    field: str | None = None   # ссылка на поле из [[fields]] (приоритет)
+    value: str | None = None   # литерал или ${GENERATOR} (запасной вариант)
 
 
 @dataclass
@@ -92,7 +115,13 @@ def _parse(raw: dict[str, Any]) -> YalConfig:
 
     targets = []
     for td in raw.get("targets", []):
-        mappings = [TargetFieldMapping(field=m["field"], key=m["key"]) for m in td.get("fields", [])]
+        mappings = []
+        for m in td.get("fields", []):
+            mappings.append(TargetFieldMapping(
+                key=m["key"],
+                field=m.get("field"),
+                value=m.get("value"),
+            ))
         targets.append(TargetDef(file=td["file"], format=td.get("format", "yaml"), mappings=mappings))
 
     messages = {}
@@ -150,19 +179,46 @@ def apply(config: YalConfig, values: dict[str, Any], dest_dir: Path) -> None:
             file_path = dest_dir / relative_path
 
             if not file_path.exists():
-                print(f"[yal] Ошибка: целевой файл {file_path} не найден.")
+                print(f"[yal] {t('config.target-not-found', path=file_path)}")
                 continue
 
-            with open(file_path, 'r', encoding='utf-8') as f:
-                data = yaml_parser.load(f)
+            raw_text = file_path.read_text(encoding='utf-8')
+            protected = _protect_unicode_escapes(raw_text)
+            data = yaml_parser.load(protected)
 
             for m in target.mappings:
-                val = values.get(m.field)
+                val = _resolve_mapping(m, values)
                 if val is not None:
                     _set_yaml_path(data, m.key, val)
 
-            with open(file_path, 'w', encoding='utf-8') as f:
-                yaml_parser.dump(data, f)
+            buf = io.StringIO()
+            yaml_parser.dump(data, buf)
+            file_path.write_text(
+                _restore_unicode_escapes(buf.getvalue()),
+                encoding='utf-8',
+            )
+
+
+def _resolve_mapping(m: TargetFieldMapping, values: dict[str, Any]) -> str | None:
+    """
+    Определяет итоговое значение для маппинга по приоритету:
+      1. field — ссылка на значение из пользовательского ввода (collect).
+      2. value — литерал или выражение ${GENERATOR}.
+
+    Если ни field, ни value не дали результата — возвращает None,
+    и запись в YAML-файл пропускается.
+    """
+    # Приоритет 1: field → берём из пользовательского ввода
+    if m.field is not None:
+        user_val = values.get(m.field)
+        if user_val is not None:
+            return user_val
+
+    # Приоритет 2: value → литерал или ${...}
+    if m.value is not None:
+        return generators.resolve(m.value)
+
+    return None
 
 
 def _set_yaml_path(data: dict, key_path: str, value: str) -> None:

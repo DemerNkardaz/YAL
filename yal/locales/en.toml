@@ -40,6 +40,7 @@ done                = "Installed to: {path}"
 
 [config]
 no-config        = "yal.toml not found — template will be copied without configuration."
+target-not-found = "Error: target file {path} not found."
 field-required   = "This field is required."
 field-select-hint = "Enter one of: {options}"
 field-invalid-option = "Invalid option. Available: {options}"
