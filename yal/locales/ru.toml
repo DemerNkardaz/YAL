@@ -69,6 +69,7 @@ arg-invalid-value            = "Недопустимое значение '{valu
 [add]
 action           = "Регистрация"
 already-registered = "Шаблон '{kind}:{name}' уже зарегистрирован с этим репозиторием."
+builtin-conflict = "'{kind}:{name}' — это имя встроенного шаблона, его нельзя использовать с 'add'. Выберите другое имя."
 name-conflict    = "Шаблон '{kind}:{name}' уже зарегистрирован с другим репозиторием:\n      {old_repo}\n      Перезаписать?"
 invalid-repo = "Нераспознанный формат репозитория: {repo}\n      Используйте полный URL (https://...), сокращение вида gitlab:user/repo или путь к локальному репозиторию"
 repo-required = "Репозиторий не указан. Укажите: yal add <kind>:<name>[@<ref>] from <repo>"

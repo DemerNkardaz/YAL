@@ -90,3 +90,15 @@ def list_kinds() -> list[str]:
 def list_names(kind: str) -> list[str]:
     registry = KIND_REGISTRIES.get(kind, {})
     return sorted(registry.keys())
+
+
+def is_builtin(kind: str, name: str) -> bool:
+    """
+    True, если (kind, name) уже определён как встроенный шаблон.
+    Используется командой `yal add`, чтобы запретить регистрацию
+    пользовательского шаблона под именем, занятым встроенным.
+    """
+    registry = KIND_REGISTRIES.get(kind)
+    if registry is None:
+        return False
+    return _iget(registry, name) is not None

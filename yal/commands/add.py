@@ -35,13 +35,14 @@ from yal import user_store
 from yal.git_provider import expand_repo_shortcut, validate_repo_url
 from yal.i18n import t, yes_variants
 from yal.templates.handler import GenericHandler
-from yal.templates.registry import TemplateEntry
+from yal.templates.registry import TemplateEntry, is_builtin
 from yal.templates import user_registry
 
 
 def run(args: argparse.Namespace) -> None:
     kind, name, ref, repo = _parse_spec(args.what, args.from_kw, args.repo)
 
+    # Проверяем, не зарегистрирован ли уже
     existing = user_registry.get_entry(kind, name)
     if existing is not None and existing.repo == repo:
         if ref is None:
@@ -63,6 +64,10 @@ def run(args: argparse.Namespace) -> None:
     else:
         exclude = None
 
+    # TemplateEntry создаётся здесь "с нуля" (а не через registry.get_entry),
+    # поэтому is_user нужно выставить явно: иначе сработает дефолт is_user=False
+    # из TemplateEntry, и GenericHandler начнёт писать в built-in store.* вместо
+    # user_store.* — то есть в ~/.yal/templates/ вместо ~/.yal/user-templates/.
     entry = TemplateEntry(repo=repo, exclude=[], is_user=True)
     handler = GenericHandler(kind)
 
@@ -137,6 +142,10 @@ def _parse_spec(what: str, from_kw: str | None, repo_spec: str | None) -> tuple[
     kind = m.group("kind").lower()
     name = m.group("name")
     ref = m.group("ref") or None
+
+    if is_builtin(kind, name):
+        print(f"[YAL] {t('add.builtin-conflict', kind=kind, name=name)}")
+        sys.exit(1)
 
     if from_kw is None and repo_spec is None:
         existing = user_registry.get_entry(kind, name)
