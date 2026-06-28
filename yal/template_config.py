@@ -94,6 +94,7 @@ class FieldDef:
     min: float | None = None       # только для type="number"
     max: float | None = None       # только для type="number"
     pattern: str | None = None     # только для type="text" — валидируется через re.fullmatch
+    allow_custom: bool = False
 
 
 @dataclass
@@ -146,6 +147,7 @@ def _parse(raw: dict[str, Any]) -> YalConfig:
             min=fd.get("min"),
             max=fd.get("max"),
             pattern=fd.get("pattern"),
+            allow_custom=fd.get("allow-custom", False),
         ))
 
     targets = []
@@ -282,34 +284,49 @@ def _ask_boolean(fd: FieldDef, prompt_text: str, default: str) -> bool:
 
 
 def _ask_select(fd: FieldDef, prompt_text: str, default: str) -> str:
-    """Один вариант из fd.options."""
-    options = fd.options
+    """Один вариант из fd.options с адаптивным кастомным вводом."""
+    custom_label = t("config.field-select-custom")
+    custom_option = custom_label if fd.allow_custom else None
+
+    display_options = list(fd.options)
+    if custom_option:
+        display_options.insert(0, custom_option)
+        if len(fd.options) >= 7:
+            display_options.append(custom_option)
 
     if picker.is_interactive():
-        initial_index = options.index(default) if default in options else 0
-        chosen = picker.pick(prompt_text, options, multi=False, initial_index=initial_index)
-        return options[chosen[0]]
+        initial_index = 0
+        if default in fd.options:
+            initial_index = display_options.index(default)
 
-    # Fallback для неинтерактивного stdin (пайп/редирект/тесты/CI) —
-    # точное совпадение строки, без учёта регистра не приводим.
-    hint = t("config.field-select-hint", options=", ".join(options))
-    while True:
-        display_default = f" [{default}]" if default else ""
-        print(f"[YAL] {prompt_text}{display_default}\n      {hint}: ", end="", flush=True)
-        try:
-            raw = input().strip()
-        except (EOFError, KeyboardInterrupt):
-            raise RuntimeError(t("errors.cancelled", action=t("create.action")))
-        value = raw if raw else default
-        if not value:
-            if fd.required:
-                print(f"[YAL] {t('config.field-required')}")
+        chosen = picker.pick(prompt_text, display_options, multi=False, initial_index=initial_index)
+        value = display_options[chosen[0]]
+    else:
+        hint = t("config.field-select-hint", options=", ".join(display_options))
+        while True:
+            display_default = f" [{default}]" if default else ""
+            print(f"[YAL] {prompt_text}{display_default}\n      {hint}: ", end="", flush=True)
+            try:
+                raw = input().strip()
+            except (EOFError, KeyboardInterrupt):
+                raise RuntimeError(t("errors.cancelled", action=t("create.action")))
+
+            value = raw if raw else default
+
+            if not value and not fd.required:
+                return ""
+
+            if value == custom_label:
+                break
+            if value not in fd.options:
+                print(f"[YAL] {t('config.field-invalid-option', options=', '.join(fd.options))}")
                 continue
-            return ""
-        if value not in options:
-            print(f"[YAL] {t('config.field-invalid-option', options=', '.join(options))}")
-            continue
-        return value
+            break
+
+    if fd.allow_custom and value == custom_label:
+        return _ask_text(fd, prompt_text, "", "")
+
+    return value
 
 
 def _ask_multi_select(fd: FieldDef, prompt_text: str, default: str) -> list[str]:
