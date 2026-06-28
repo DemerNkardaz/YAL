@@ -8,8 +8,8 @@ clean:
 build: clean
 	py -m build
 
-dev:
+dev: clean build
 	pip install -e .
 
-publish:
+publish: clean build
 	python -m twine upload dist/* --verbose

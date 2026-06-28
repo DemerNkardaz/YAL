@@ -51,6 +51,11 @@ field-unknown-type = "У поля '{id}' неизвестный тип '{type}' 
 field-picker-hint-single = "(↑/↓ навигация, Enter подтвердить)"
 field-picker-hint-multi = "(↑/↓ навигация, Space отметить, Enter подтвердить)"
 field-required-hint = "(выберите хотя бы один)"
+field-number-invalid = "Введите корректное число."
+field-number-range = "Должно быть от {min} до {max}"
+field-list-hint = "Введите по одному, пустая строка — конец:"
+field-pattern-invalid = "Значение не соответствует требуемому формату ({pattern})."
+field-pattern-invalid-regex = "У поля '{id}' некорректный pattern ({error}) — проверка пропущена."
 executing = "Выполнение: {name}"
 executing-failed = "Выполнение неудалось: {name}. Ошибка: {error}"
 

@@ -282,7 +282,7 @@ Each `[[fields]]` entry supports:
 | Field            | Description                                                                                                                                                                                  |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `id`             | Unique identifier, used as key in mappings and message lookups                                                                                                                               |
-| `type`           | Input type: `text`, `select`, `multi-select`, or `boolean` (see Field types below)                                                                                                           |
+| `type`           | Input type: `text`, `number`, `list`, `select`, `multi-select`, or `boolean` (see Field types below)                                                                                                           |
 | `required`       | If `true`, the user must provide a non-empty value (for `multi-select`, at least one item)                                                                                                   |
 | `default`        | Default value used if the user presses Enter without typing. Use `"{placeholder}"` to mirror the placeholder. For `boolean`/`multi-select`, a native TOML `true`/`false` or array also works |
 | `options`        | The list of choices — required for `select` and `multi-select`                                                                                                                               |
@@ -291,6 +291,10 @@ Each `[[fields]]` entry supports:
 ### Field types
 
 **`text`** — free-form input. `options`, if given, is just a hint and isn't enforced.
+
+**`number`** — an integer or float.
+
+**`list`** — one or more values, separated by commas.
 
 **`select`** — exactly one value from `options`. In an interactive terminal this renders as an arrow-key picker (`↑`/`↓` to move, `Enter` to confirm); when stdin isn't a real terminal (pipes, CI), it falls back to typed input validated against `options`.
 

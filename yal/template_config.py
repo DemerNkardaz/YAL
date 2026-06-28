@@ -78,7 +78,9 @@ yaml_parser.representer.add_representer(type(None), _represent_none)
 
 # Известные типы полей. Неизвестный type трактуется как "text" с предупреждением —
 # в духе остального кода (неизвестный формат target тоже не валит выполнение).
-KNOWN_FIELD_TYPES: frozenset[str] = frozenset({"text", "select", "multi-select", "boolean"})
+KNOWN_FIELD_TYPES: frozenset[str] = frozenset(
+    {"text", "select", "multi-select", "boolean", "number", "list"}
+)
 
 
 @dataclass
@@ -89,6 +91,9 @@ class FieldDef:
     default: str
     options: list[str]
     is_folder_name: bool = False
+    min: float | None = None       # только для type="number"
+    max: float | None = None       # только для type="number"
+    pattern: str | None = None     # только для type="text" — валидируется через re.fullmatch
 
 
 @dataclass
@@ -129,9 +134,19 @@ def load(template_dir: Path) -> YalConfig | None:
 
 def _parse(raw: dict[str, Any]) -> YalConfig:
     meta = raw.get("meta", {})
-    fields = [FieldDef(id=fd["id"], type=fd.get("type", "text"), required=fd.get("required", False),
-                       default=generators.to_str(fd.get("default", "")), options=fd.get("options", []),
-                       is_folder_name=fd.get("is-folder-name", False)) for fd in raw.get("fields", [])]
+    fields: list[FieldDef] = []
+    for fd in raw.get("fields", []):
+        fields.append(FieldDef(
+            id=fd["id"],
+            type=fd.get("type", "text"),
+            required=fd.get("required", False),
+            default=generators.to_str(fd.get("default", "")),
+            options=fd.get("options", []),
+            is_folder_name=fd.get("is-folder-name", False),
+            min=fd.get("min"),
+            max=fd.get("max"),
+            pattern=fd.get("pattern"),
+        ))
 
     targets = []
     for td in raw.get("targets", []):
@@ -214,6 +229,10 @@ def _ask(fd: FieldDef, prompt_text: str, placeholder: str, default: str) -> Any:
         return _ask_select(fd, prompt_text, default)
     if fd.type == "multi-select":
         return _ask_multi_select(fd, prompt_text, default)
+    if fd.type == "number":
+        return _ask_number(fd, prompt_text, default)
+    if fd.type == "list":
+        return _ask_list(fd, prompt_text, default)
 
     if fd.type not in KNOWN_FIELD_TYPES:
         print(f"[YAL] {t('config.field-unknown-type', id=fd.id, type=fd.type)}")
@@ -221,6 +240,13 @@ def _ask(fd: FieldDef, prompt_text: str, placeholder: str, default: str) -> Any:
 
 
 def _ask_text(fd: FieldDef, prompt_text: str, placeholder: str, default: str) -> str:
+    compiled_pattern: re.Pattern[str] | None = None
+    if fd.pattern:
+        try:
+            compiled_pattern = re.compile(fd.pattern)
+        except re.error as e:
+            print(f"[YAL] {t('config.field-pattern-invalid-regex', id=fd.id, error=e)}")
+
     while True:
         display_default = f" [{default}]" if default else ""
         print(f"[YAL] {prompt_text}{display_default}: ", end="", flush=True)
@@ -230,6 +256,9 @@ def _ask_text(fd: FieldDef, prompt_text: str, placeholder: str, default: str) ->
             raise RuntimeError(t("errors.cancelled", action=t("create.action")))
         value = raw if raw else default
         if fd.required and not value:
+            continue
+        if value and compiled_pattern is not None and not compiled_pattern.fullmatch(value):
+            print(f"[YAL] {t('config.field-pattern-invalid', pattern=fd.pattern)}")
             continue
         return value
 
@@ -327,6 +356,93 @@ def _ask_multi_select(fd: FieldDef, prompt_text: str, default: str) -> list[str]
                 seen.add(v)
                 result.append(v)
         return result
+
+
+def _parse_number(raw: str) -> int | float | None:
+    """int предпочтительнее float — "8080" должно остаться 8080, не 8080.0."""
+    try:
+        return int(raw)
+    except ValueError:
+        pass
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def _number_range_text(fd: FieldDef) -> str | None:
+    """Единая фраза диапазона — используется и как постоянная подсказка
+    у строки ввода, и как сообщение об ошибке при выходе за границы."""
+    if fd.min is None and fd.max is None:
+        return None
+    lo = fd.min if fd.min is not None else "-∞"
+    hi = fd.max if fd.max is not None else "∞"
+    return t("config.field-number-range", min=lo, max=hi)
+
+
+def _ask_number(fd: FieldDef, prompt_text: str, default: str) -> int | float | None:
+    """
+    Числовой ввод с опциональной валидацией диапазона (fd.min/fd.max).
+    Не required + пусто → None (а не 0 — отсутствие значения это не ноль).
+    """
+    range_text = _number_range_text(fd)
+    while True:
+        display_default = f" [{default}]" if default else ""
+        suffix = f"  ({range_text})" if range_text else ""
+        print(f"[YAL] {prompt_text}{display_default}{suffix}: ", end="", flush=True)
+        try:
+            raw = input().strip()
+        except (EOFError, KeyboardInterrupt):
+            raise RuntimeError(t("errors.cancelled", action=t("create.action")))
+
+        raw_value = raw if raw else default
+        if not raw_value:
+            if fd.required:
+                print(f"[YAL] {t('config.field-required')}")
+                continue
+            return None
+
+        value = _parse_number(raw_value)
+        if value is None:
+            print(f"[YAL] {t('config.field-number-invalid')}")
+            continue
+        if (fd.min is not None and value < fd.min) or (fd.max is not None and value > fd.max):
+            print(f"[YAL] {range_text}")
+            continue
+        return value
+
+
+def _ask_list(fd: FieldDef, prompt_text: str, default: str) -> list[str]:
+    """
+    Произвольный список строк — в отличие от multi-select, варианты не
+    ограничены фиксированным набором. Ввод по одной строке, пустая
+    строка — конец (тот же паттерн, что уже использует add._ask_excludes).
+    """
+    default_list = [v.strip() for v in default.split(",") if v.strip()] if default else []
+    hint = t("config.field-list-hint")
+
+    while True:
+        display_default = f" [{', '.join(default_list)}]" if default_list else ""
+        print(f"[YAL] {prompt_text}{display_default}\n      {hint}")
+        items: list[str] = []
+        while True:
+            print("  > ", end="", flush=True)
+            try:
+                line = input().strip()
+            except (EOFError, KeyboardInterrupt):
+                raise RuntimeError(t("errors.cancelled", action=t("create.action")))
+            if not line:
+                break
+            items.append(line)
+
+        if not items:
+            items = default_list
+
+        if not items and fd.required:
+            print(f"[YAL] {t('config.field-required')}")
+            continue
+
+        return items
 
 
 # Канонические "истинные" строки для default булевых полей (не зависит от
@@ -516,8 +632,10 @@ def _resolve_mapping(m: TargetFieldMapping, values: dict[str, Any]) -> tuple[boo
 
 def _is_empty(value: Any) -> bool:
     """
-    "Пусто" для text — "", для multi-select — []. boolean False НЕ считается
-    пустым — это полноценный, осознанно выбранный ответ, а не отсутствие ввода.
+    "Пусто": "" для text/number-как-строка, [] для multi-select/list, None
+    для number без значения. boolean False и числовой 0 НЕ считаются
+    пустыми — это полноценные, осознанно выбранные ответы, а не
+    отсутствие ввода.
     """
     return value is None or value == "" or value == []
 

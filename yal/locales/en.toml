@@ -51,6 +51,11 @@ field-unknown-type = "Field '{id}' has unknown type '{type}' — falling back to
 field-picker-hint-single = "(↑/↓ navigate, Enter confirm)"
 field-picker-hint-multi = "(↑/↓ navigate, Space toggle, Enter confirm)"
 field-required-hint = "(select at least one)"
+field-number-invalid = "Enter a valid number."
+field-number-range = "Must be between {min} and {max}"
+field-list-hint = "Enter one per line, blank line to finish:"
+field-pattern-invalid = "Value doesn't match the required format ({pattern})."
+field-pattern-invalid-regex = "Field '{id}' has an invalid pattern ({error}) — validation skipped."
 executing = "Executing: {name}"
 executing-failed = "Command failed: {name}. Error: {error}"
 
