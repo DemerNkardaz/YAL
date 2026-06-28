@@ -1,5 +1,7 @@
 # [YAL](https://pypi.org/project/yal-cmd/)
 
+<img src="logo.svg" width="48" style="float: left; margin-right: 0.75em" />
+
 **YAL** is a command-line utility for project initialization and updates based on templates from git repositories.
 
 It also supports project-local commands (similar to Makefile targets or scripts in package.json). Define them in `yal.toml` and invoke them with `yal <command>`.

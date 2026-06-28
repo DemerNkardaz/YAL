@@ -58,3 +58,6 @@ Thumbs.db
 # Packaging lock files (если не хочешь коммитить)
 # uv.lock
 # poetry.lock
+
+
+*~lock~
