@@ -228,10 +228,25 @@ def collect(config: YalConfig) -> dict[str, Any]:
             try:
                 show = conditions.evaluate(fd.show_if, values)
                 if not show:
-                    # Поле скрыто — используем default
-                    default = fd.default
-                    if default == "{placeholder}":
-                        default = ""
+                    # Поле скрыто — используем default с правильным типом
+                    if fd.type == "boolean":
+                        default = fd.default.strip().lower() in _TRUE_STRINGS
+                    elif fd.type == "number":
+                        try:
+                            default = int(fd.default)
+                        except ValueError:
+                            try:
+                                default = float(fd.default)
+                            except ValueError:
+                                default = None
+                    elif fd.type == "multi-select":
+                        default = [v.strip() for v in fd.default.split(",") if v.strip()] if fd.default else []
+                    elif fd.type == "list":
+                        default = [v.strip() for v in fd.default.split(",") if v.strip()] if fd.default else []
+                    else:
+                        default = fd.default
+                        if default == "{placeholder}":
+                            default = ""
                     values[fd.id] = default
                     continue
             except Exception:
@@ -315,14 +330,15 @@ _CUSTOM = object()
 
 def _option_display(fd: FieldDef, config: YalConfig, opt: str) -> tuple[Any, str]:
     """
-    value   — opt, либо переведённое значение из messages.<id>.option.<opt>
-              (полная замена значения, а не просто подсказка — именно это
-              попадёт в собранные данные и итоговые файлы);
-    display — value + описание из messages.<id>.option.label.<opt>, если задано.
+    value   — opt (оригинальное значение, которое попадет в values)
+    display — локализованное отображение + описание
     """
-    value = _get_msg(config, fd.id, f"option.{opt}", opt)
+    # Для хранения используем оригинальное значение opt
+    value = opt
+    # Для отображения берем локализованное
+    display_value = _get_msg(config, fd.id, f"option.{opt}", opt)
     label = _get_msg(config, fd.id, f"option.label.{opt}", "")
-    display = f"{value} — {label}" if label else value
+    display = f"{display_value} — {label}" if label else display_value
     return value, display
 
 
@@ -330,11 +346,11 @@ def _ask_select(fd: FieldDef, prompt_text: str, default: str, config: YalConfig)
     custom_label = t("config.field-select-custom")
 
     resolved = [_option_display(fd, config, opt) for opt in fd.options]
-    option_values: list[Any] = [v for v, _ in resolved]
-    display_options: list[str] = [d for _, d in resolved]
-    # default из [[fields]] всегда канонический (как в options); приводим
-    # его к переведённой форме, чтобы дефолт/возврат были в той же системе.
-    default_value = option_values[fd.options.index(default)] if default in fd.options else default
+    option_values: list[Any] = [v for v, _ in resolved]  # Оригинальные значения
+    display_options: list[str] = [d for _, d in resolved]  # Локализованные для отображения
+
+    # default из [[fields]] всегда оригинальное значение
+    default_value = default if default in fd.options else default
 
     if fd.allow_custom:
         option_values.append(_CUSTOM)
@@ -373,7 +389,7 @@ def _ask_select(fd: FieldDef, prompt_text: str, default: str, config: YalConfig)
 
     if value is _CUSTOM:
         return _ask_text(fd, prompt_text, "", "")
-    return str(value)
+    return str(value)  # Возвращаем оригинальное значение
 
 
 def _ask_multi_select(fd: FieldDef, prompt_text: str, default: str, config: YalConfig) -> list[str]:
@@ -386,8 +402,8 @@ def _ask_multi_select(fd: FieldDef, prompt_text: str, default: str, config: YalC
     """
     options = fd.options
     resolved = [_option_display(fd, config, opt) for opt in options]
-    option_values: list[Any] = [v for v, _ in resolved]
-    display_options: list[str] = [d for _, d in resolved]
+    option_values: list[Any] = [v for v, _ in resolved]  # Оригинальные значения
+    display_options: list[str] = [d for _, d in resolved]  # Локализованные для отображения
 
     default_list = [v.strip() for v in default.split(",") if v.strip()] if default else []
     default_display = [
@@ -418,8 +434,7 @@ def _ask_multi_select(fd: FieldDef, prompt_text: str, default: str, config: YalC
             return _ask_multi_select(fd, prompt_text, default, config)
         return result
 
-    # Fallback для неинтерактивного stdin (пайп/редирект/тесты/CI) — ввод
-    # через запятую. allow-custom: значения вне option_values принимаются как есть.
+    # Fallback для неинтерактивного stdin
     hint_key = "config.field-multiselect-hint-custom" if fd.allow_custom else "config.field-multiselect-hint"
     hint = t(hint_key, options=", ".join(display_options))
     while True:
@@ -603,26 +618,26 @@ def apply(config: YalConfig, values: dict[str, Any], dest_dir: Path) -> None:
 
         fmt = target.format.lower()
         if fmt == "yaml":
-            _apply_yaml(target, values, file_path)
+            _apply_yaml(target, values, file_path, config)
         elif fmt == "json":
-            _apply_json(target, values, file_path)
+            _apply_json(target, values, file_path, config)
         elif fmt == "toml":
-            _apply_toml(target, values, file_path)
+            _apply_toml(target, values, file_path, config)
         elif fmt == "env":
-            _apply_env(target, values, file_path)
+            _apply_env(target, values, file_path, config)
         else:
             print(f"[YAL] {t('config.unknown-format', fmt=fmt, path=file_path)}")
 
 
 # ─── yaml ─────────────────────────────────────────────────────────────────────
 
-def _apply_yaml(target: "TargetDef", values: dict[str, Any], file_path: Path) -> None:
+def _apply_yaml(target: "TargetDef", values: dict[str, Any], file_path: Path, config: YalConfig) -> None:
     raw_text = file_path.read_text(encoding='utf-8')
     protected = _protect_unicode_escapes(raw_text)
     data = yaml_parser.load(protected)
 
     for m in target.mappings:
-        should_set, val = _resolve_mapping(m, values)
+        should_set, val = _resolve_mapping(m, values, config)
         if should_set:
             _set_nested_path(data, m.key, val)
 
@@ -636,12 +651,12 @@ def _apply_yaml(target: "TargetDef", values: dict[str, Any], file_path: Path) ->
 
 # ─── json ─────────────────────────────────────────────────────────────────────
 
-def _apply_json(target: "TargetDef", values: dict[str, Any], file_path: Path) -> None:
+def _apply_json(target: "TargetDef", values: dict[str, Any], file_path: Path, config: YalConfig) -> None:
     raw_text = file_path.read_text(encoding='utf-8')
     data = json.loads(raw_text)
 
     for m in target.mappings:
-        should_set, val = _resolve_mapping(m, values)
+        should_set, val = _resolve_mapping(m, values, config)
         if should_set:
             # JSON null: наш маркер уже разрешён в None через _resolve_mapping
             _set_nested_path(data, m.key, val)
@@ -654,7 +669,7 @@ def _apply_json(target: "TargetDef", values: dict[str, Any], file_path: Path) ->
 
 # ─── toml ─────────────────────────────────────────────────────────────────────
 
-def _apply_toml(target: "TargetDef", values: dict[str, Any], file_path: Path) -> None:
+def _apply_toml(target: "TargetDef", values: dict[str, Any], file_path: Path, config: YalConfig) -> None:
     if not _TOMLI_W_AVAILABLE or _tomli_w is None:
         print(f"[YAL] {t('config.toml-write-unavailable', path=file_path)}")
         return
@@ -663,7 +678,7 @@ def _apply_toml(target: "TargetDef", values: dict[str, Any], file_path: Path) ->
         data = tomllib.load(f)
 
     for m in target.mappings:
-        should_set, val = _resolve_mapping(m, values)
+        should_set, val = _resolve_mapping(m, values, config)
         if should_set:
             if val is not None:
                 _set_nested_path(data, m.key, val)
@@ -673,7 +688,7 @@ def _apply_toml(target: "TargetDef", values: dict[str, Any], file_path: Path) ->
 
 # ─── env ──────────────────────────────────────────────────────────────────────
 
-def _apply_env(target: "TargetDef", values: dict[str, Any], file_path: Path) -> None:
+def _apply_env(target: "TargetDef", values: dict[str, Any], file_path: Path, config: YalConfig) -> None:
     """
     Записывает/обновляет пары KEY=value в .env-файле.
     key в mappings — это имя переменной (напр. "APP_NAME" или "VITE_API_URL").
@@ -687,7 +702,7 @@ def _apply_env(target: "TargetDef", values: dict[str, Any], file_path: Path) -> 
 
     updates: dict[str, str | None] = {}
     for m in target.mappings:
-        should_set, val = _resolve_mapping(m, values)
+        should_set, val = _resolve_mapping(m, values, config)
         if should_set:
             key = m.key.split(".")[-1]  # dot-нотацию игнорируем, берём последний сегмент
             updates[key] = None if val is None else generators.to_str(val)
@@ -725,11 +740,11 @@ def _env_quote(value: str) -> str:
     return value
 
 
-def _resolve_mapping(m: TargetFieldMapping, values: dict[str, Any]) -> tuple[bool, Any]:
+def _resolve_mapping(m: TargetFieldMapping, values: dict[str, Any], config: YalConfig) -> tuple[bool, Any]:
     """
     Возвращает (should_set, value).
     should_set: True — нужно записать значение (даже если оно None/null)
-    value: само значение для записи
+    value: само значение для записи (локализованное)
     """
     raw_val = None
     # Сначала пытаемся получить значение
@@ -749,6 +764,11 @@ def _resolve_mapping(m: TargetFieldMapping, values: dict[str, Any]) -> tuple[boo
     # Если нашли наш маркер — это значит "установить значение в None"
     if raw_val == "__YAL_NULL__":
         return True, None
+
+    # Находим FieldDef для локализации
+    fd = next((f for f in config.fields if f.id == m.field), None)
+    if fd and fd.type in ("select", "multi-select"):
+        raw_val = _localize_value(fd, config, raw_val)
 
     return True, raw_val
 
@@ -798,3 +818,26 @@ def get_folder_name(config: YalConfig, values: dict[str, Any]) -> str | None:
             # на дефолтное имя папки, а не роняем Path(...) на не-str.
             return val if isinstance(val, str) and val else None
     return None
+
+
+def _localize_value(fd: FieldDef, config: YalConfig, value: Any) -> Any:
+    """
+    Преобразует оригинальное значение в локализованное для записи в файл.
+    Если value - список, преобразует каждый элемент.
+    Если value - строка и для нее есть локализация, возвращает локализованную строку.
+    """
+    if value is None:
+        return None
+
+    # Если список - обрабатываем каждый элемент
+    if isinstance(value, list):
+        return [_localize_value(fd, config, item) for item in value]
+
+    # Если строка - ищем локализацию
+    if isinstance(value, str):
+        # Ищем локализацию для этого значения
+        localized = _get_msg(config, fd.id, f"option.{value}", value)
+        return localized
+
+    # Иначе возвращаем как есть
+    return value
