@@ -295,17 +295,29 @@ def _ask_boolean(fd: FieldDef, prompt_text: str, default: str) -> bool:
 _CUSTOM = object()
 
 
-def _option_label(fd: FieldDef, config: YalConfig, opt: str) -> str:
-    """Текст опции для отображения: код + описание из messages.<id>.option.<opt>, если задано."""
-    description = _get_msg(config, fd.id, f"option.{opt}", "")
-    return f"{opt} — {description}" if description else opt
+def _option_display(fd: FieldDef, config: YalConfig, opt: str) -> tuple[Any, str]:
+    """
+    value   — opt, либо переведённое значение из messages.<id>.option.<opt>
+              (полная замена значения, а не просто подсказка — именно это
+              попадёт в собранные данные и итоговые файлы);
+    display — value + описание из messages.<id>.option.label.<opt>, если задано.
+    """
+    value = _get_msg(config, fd.id, f"option.{opt}", opt)
+    label = _get_msg(config, fd.id, f"option.label.{opt}", "")
+    display = f"{value} — {label}" if label else value
+    return value, display
 
 
 def _ask_select(fd: FieldDef, prompt_text: str, default: str, config: YalConfig) -> str:
     custom_label = t("config.field-select-custom")
 
-    option_values: list[Any] = list(fd.options)
-    display_options = [_option_label(fd, config, opt) for opt in fd.options]
+    resolved = [_option_display(fd, config, opt) for opt in fd.options]
+    option_values: list[Any] = [v for v, _ in resolved]
+    display_options: list[str] = [d for _, d in resolved]
+    # default из [[fields]] всегда канонический (как в options); приводим
+    # его к переведённой форме, чтобы дефолт/возврат были в той же системе.
+    default_value = option_values[fd.options.index(default)] if default in fd.options else default
+
     if fd.allow_custom:
         option_values.append(_CUSTOM)
         display_options.append(custom_label)
@@ -317,14 +329,14 @@ def _ask_select(fd: FieldDef, prompt_text: str, default: str, config: YalConfig)
     else:
         hint = t("config.field-select-hint", options=", ".join(display_options))
         while True:
-            display_default = f" [{default}]" if default else ""
+            display_default = f" [{default_value}]" if default_value else ""
             print(f"[YAL] {prompt_text}{display_default}\n      {hint}: ", end="", flush=True)
             try:
                 raw = input().strip()
             except (EOFError, KeyboardInterrupt):
                 raise RuntimeError(t("errors.cancelled", action=t("create.action")))
 
-            raw_value = raw if raw else default
+            raw_value = raw if raw else default_value
 
             if not raw_value:
                 if fd.required:
@@ -335,11 +347,11 @@ def _ask_select(fd: FieldDef, prompt_text: str, default: str, config: YalConfig)
             if fd.allow_custom and raw_value == custom_label:
                 value = _CUSTOM
                 break
-            if raw_value in fd.options:
+            if raw_value in option_values:
                 value = raw_value
                 break
 
-            print(f"[YAL] {t('config.field-invalid-option', options=', '.join(fd.options))}")
+            print(f"[YAL] {t('config.field-invalid-option', options=', '.join(display_options))}")
 
     if value is _CUSTOM:
         return _ask_text(fd, prompt_text, "", "")
@@ -348,28 +360,36 @@ def _ask_select(fd: FieldDef, prompt_text: str, default: str, config: YalConfig)
 
 def _ask_multi_select(fd: FieldDef, prompt_text: str, default: str, config: YalConfig) -> list[str]:
     """
-    Несколько вариантов из fd.options, с опциональными описаниями
-    (messages.<id>.option.<value>) и опциональным кастомным вводом
-    (allow-custom) — кастомные пункты вводятся как в type="list" (свободный
-    список строк), а не как одно текстовое значение, как в select.
-    Возвращает list[str], без дублей.
+    Несколько вариантов из fd.options, с опциональной заменой значения и
+    описанием (messages.<id>.option.<value> / option.label.<value>) и
+    опциональным кастомным вводом (allow-custom) — кастомные пункты вводятся
+    как в type="list" (свободный список строк), а не как одно текстовое
+    значение, как в select. Возвращает list[str], без дублей.
     """
     options = fd.options
+    resolved = [_option_display(fd, config, opt) for opt in options]
+    option_values: list[Any] = [v for v, _ in resolved]
+    display_options: list[str] = [d for _, d in resolved]
+
     default_list = [v.strip() for v in default.split(",") if v.strip()] if default else []
+    default_display = [
+        option_values[options.index(v)] if v in options else v
+        for v in default_list
+    ]
 
     if picker.is_interactive():
-        display_options = [_option_label(fd, config, opt) for opt in options]
-        option_values: list[Any] = list(options)
+        pick_display = list(display_options)
+        pick_values: list[Any] = list(option_values)
         if fd.allow_custom:
-            display_options.append(t("config.field-select-custom"))
-            option_values.append(_CUSTOM)
+            pick_display.append(t("config.field-select-custom"))
+            pick_values.append(_CUSTOM)
 
         initial_checked = {options.index(v) for v in default_list if v in options}
         chosen = picker.pick(
-            prompt_text, display_options, multi=True,
+            prompt_text, pick_display, multi=True,
             initial_checked=initial_checked, required=fd.required,
         )
-        selected = [option_values[i] for i in chosen]
+        selected = [pick_values[i] for i in chosen]
         result = _dedupe([v for v in selected if v is not _CUSTOM])
         if _CUSTOM in selected:
             result = _dedupe(result + _collect_lines(t("config.field-multiselect-custom-prompt")))
@@ -380,19 +400,18 @@ def _ask_multi_select(fd: FieldDef, prompt_text: str, default: str, config: YalC
         return result
 
     # Fallback для неинтерактивного stdin (пайп/редирект/тесты/CI) — ввод
-    # через запятую. allow-custom: значения вне options принимаются как есть.
-    hint_options = ", ".join(_option_label(fd, config, opt) for opt in options)
+    # через запятую. allow-custom: значения вне option_values принимаются как есть.
     hint_key = "config.field-multiselect-hint-custom" if fd.allow_custom else "config.field-multiselect-hint"
-    hint = t(hint_key, options=hint_options)
+    hint = t(hint_key, options=", ".join(display_options))
     while True:
-        display_default = f" [{', '.join(default_list)}]" if default_list else ""
+        display_default = f" [{', '.join(default_display)}]" if default_display else ""
         print(f"[YAL] {prompt_text}{display_default}\n      {hint}: ", end="", flush=True)
         try:
             raw = input().strip()
         except (EOFError, KeyboardInterrupt):
             raise RuntimeError(t("errors.cancelled", action=t("create.action")))
 
-        chosen = [v.strip() for v in raw.split(",") if v.strip()] if raw else default_list
+        chosen = [v.strip() for v in raw.split(",") if v.strip()] if raw else default_display
 
         if not chosen:
             if fd.required:
@@ -401,9 +420,9 @@ def _ask_multi_select(fd: FieldDef, prompt_text: str, default: str, config: YalC
             return []
 
         if not fd.allow_custom:
-            invalid = [v for v in chosen if v not in options]
+            invalid = [v for v in chosen if v not in option_values]
             if invalid:
-                print(f"[YAL] {t('config.field-invalid-option', options=', '.join(options))}")
+                print(f"[YAL] {t('config.field-invalid-option', options=', '.join(display_options))}")
                 continue
 
         return _dedupe(chosen)
