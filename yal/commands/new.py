@@ -72,11 +72,12 @@ def run(args: argparse.Namespace) -> None:
             template_config.apply(config, values, result.dest)
             fill_yal_project_origin(result.dest, template=kind, template_version=result.version)
 
-            # 👇 СОХРАНЯЕМ ОТВЕТЫ
             write_answers(result.dest, values)
 
-            if config.post_commands:
-                template_config.run_post_commands(config.post_commands, result.dest)
+            values["_project_path"] = str(result.dest)
+
+            if config.actions and config.actions.post:
+                template_config.run_actions(config.actions, values, result.dest, "post")
         else:
             print(f"[YAL] {t('config.no-config')}")
 

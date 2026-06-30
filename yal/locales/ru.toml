@@ -61,6 +61,9 @@ field-pattern-invalid = "Значение не соответствует тре
 field-pattern-invalid-regex = "У поля '{id}' некорректный pattern ({error}) — проверка пропущена."
 executing = "Выполнение: {name}"
 executing-failed = "Выполнение неудалось: {name}. Ошибка: {error}"
+action-skipped = "Пропускаем команду '{name}' (условие: {condition})"
+action-condition-error = "Ошибка при проверке условия для '{name}': {error}"
+action-os-skip = "Пропускаем команду '{name}' (требуется {os}, текущая {current_os})"
 
 [project]
 no-toml                      = ".yal/project.toml не найден. Пользовательские команды должны быть объвлены в этом файле."

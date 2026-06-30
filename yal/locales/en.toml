@@ -62,6 +62,9 @@ field-pattern-invalid = "Value doesn't match the required format ({pattern})."
 field-pattern-invalid-regex = "Field '{id}' has an invalid pattern ({error}) — validation skipped."
 executing = "Executing: {name}"
 executing-failed = "Command failed: {name}. Error: {error}"
+action-skipped = "Skipping command '{name}' (condition: {condition})"
+action-condition-error = "Error evaluating condition for '{name}': {error}"
+action-os-skip = "Skipping command '{name}' (requires {os}, current is {current_os})"
 
 [project]
 no-toml                      = ".yal/project.toml not found. Custom commands must be defined in this file."

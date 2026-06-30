@@ -110,6 +110,18 @@ class TargetFieldMapping:
 
 
 @dataclass
+class ActionCommand:
+    cmd: str
+    if_expr: str | None = None
+    os: str | None = None
+
+
+@dataclass
+class Actions:
+    pre: list[ActionCommand] = dc_field(default_factory=list)
+    post: list[ActionCommand] = dc_field(default_factory=list)
+
+@dataclass
 class TargetDef:
     file: str
     format: str
@@ -123,6 +135,7 @@ class YalConfig:
     targets: list[TargetDef]
     messages: dict[str, dict[str, dict[str, str]]]
     post_commands: list[str] = dc_field(default_factory=list)
+    actions: Actions = dc_field(default_factory=Actions)
     exclude: list[str] = dc_field(default_factory=list)
 
 
@@ -174,55 +187,129 @@ def _parse(raw: dict[str, Any]) -> YalConfig:
 
     for key, value in raw_messages.items():
         if not isinstance(value, dict):
-            # Короткая форма: messages.book-genre = "Enter book genre"
             messages["_base"][key] = {"prompt": str(value)}
             continue
 
         if key in field_ids:
-            # messages.<field-id> — базовые (не локализованные) сообщения поля.
-            # Сюда попадёт всё целиком: prompt, placeholder, option.*, и любые
-            # другие произвольные ключи — без хардкода на конкретные имена.
             messages["_base"][key] = value
         else:
-            # messages.<lang> — секция локализации; внутри — снова field-id → message-dict.
             messages[key] = {
                 fid: (msg if isinstance(msg, dict) else {"prompt": str(msg)})
                 for fid, msg in value.items()
             }
+
+    actions = _parse_actions(raw, meta)
 
     return YalConfig(
         min_version=meta.get("yal-min-version", get_version()),
         fields=fields,
         targets=targets,
         messages=messages,
-        post_commands=meta.get("post-commands", []),
+        actions=actions,
         exclude=meta.get("exclude", [])
     )
 
 
-def run_post_commands(commands: list[str], dest_dir: Path) -> None:
-    """Исполняет команды в директории проекта."""
+def _parse_actions(raw: dict[str, Any], meta: dict[str, Any]) -> Actions:
+    """
+    Парсит actions из конфига.
+    Поддерживает:
+    1. Старый формат: meta.post-commands = ["cmd1", "cmd2"]
+    2. Новый формат: actions.post = [ { cmd: "cmd1" }, { cmd: "cmd2", if: "condition", os: "windows" } ]
+    """
+    pre_commands: list[ActionCommand] = []
+    post_commands: list[ActionCommand] = []
+
+    if "actions" in raw:
+        actions_raw = raw["actions"]
+
+        if "pre" in actions_raw and isinstance(actions_raw["pre"], list):
+            for cmd in actions_raw["pre"]:
+                if isinstance(cmd, dict):
+                    pre_commands.append(ActionCommand(
+                        cmd=cmd.get("cmd", ""),
+                        if_expr=cmd.get("if"),
+                        os=cmd.get("os")
+                    ))
+                elif isinstance(cmd, str):
+                    pre_commands.append(ActionCommand(cmd=cmd))
+
+        if "post" in actions_raw and isinstance(actions_raw["post"], list):
+            for cmd in actions_raw["post"]:
+                if isinstance(cmd, dict):
+                    post_commands.append(ActionCommand(
+                        cmd=cmd.get("cmd", ""),
+                        if_expr=cmd.get("if"),
+                        os=cmd.get("os")
+                    ))
+                elif isinstance(cmd, str):
+                    post_commands.append(ActionCommand(cmd=cmd))
+
+    if "post-commands" in meta:
+        for cmd in meta["post-commands"]:
+            post_commands.append(ActionCommand(cmd=cmd))
+
+    return Actions(pre=pre_commands, post=post_commands)
+
+
+def run_actions(actions: Actions, values: dict[str, Any], dest_dir: Path, phase: str = "post") -> None:
+    """
+    Исполняет команды из указанной фазы (pre или post).
+    Поддерживает:
+    - условия if через тот же движок, что и show-if
+    - подстановку {field} через generators.resolve()
+    - фильтрацию по os (windows, linux, macos)
+    """
     import platform
     on_windows = platform.system() == "Windows"
-    for cmd in commands:
-        print(f"[YAL] {t('config.executing', name=cmd)}")
+    on_linux = platform.system() == "Linux"
+    on_macos = platform.system() == "Darwin"
+
+    # Определяем текущую ОС
+    current_os = "windows" if on_windows else ("linux" if on_linux else ("macos" if on_macos else "unknown"))
+
+    commands = actions.pre if phase == "pre" else actions.post
+
+    for action in commands:
+        if action.os is not None and action.os.lower() != current_os:
+            print(f"[YAL] {t('config.action-os-skip', name=action.cmd, os=action.os, current_os=current_os)}")
+            continue
+
+        if action.if_expr:
+            try:
+                should_run = conditions.evaluate(action.if_expr, values)
+                if not should_run:
+                    print(f"[YAL] {t('config.action-skipped', name=action.cmd, condition=action.if_expr)}")
+                    continue
+            except Exception as e:
+                print(f"[YAL] {t('config.action-condition-error', name=action.cmd, error=e)}")
+                continue
+
+        resolved = generators.resolve(action.cmd, values)
+        resolved_cmd = str(resolved) if resolved is not None else ""
+
+        if not resolved_cmd:
+            print(f"[YAL] {t('config.action-empty-command')}")
+            continue
+
+        print(f"[YAL] {t('config.executing', name=resolved_cmd)}")
         try:
             if on_windows:
-                # На Windows .cmd/.bat-обёртки (npm, npx, pip и т.п.) не найдёт
-                # без shell=True — передаём строку напрямую
-                subprocess.run(cmd, cwd=dest_dir, check=True, shell=True)
+                subprocess.run(resolved_cmd, cwd=dest_dir, check=True, shell=True)
             else:
-                subprocess.run(shlex.split(cmd), cwd=dest_dir, check=True)
+                subprocess.run(shlex.split(resolved_cmd), cwd=dest_dir, check=True)
         except subprocess.CalledProcessError as e:
-            print(f"[YAL] {t('config.executing-failed', name=cmd, error=e)}")
+            print(f"[YAL] {t('config.executing-failed', name=resolved_cmd, error=e)}")
 
 
 # ─── интерактивный сбор ───────────────────────────────────────────────────────
 
 def collect(config: YalConfig) -> dict[str, Any]:
     values: dict[str, Any] = {}
+
+    run_actions(config.actions, values, Path.cwd(), "pre")
+
     for fd in config.fields:
-        # Проверяем show-if
         if hasattr(fd, 'show_if') and fd.show_if:
             try:
                 show = conditions.evaluate(fd.show_if, values)

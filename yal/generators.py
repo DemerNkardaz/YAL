@@ -124,18 +124,19 @@ def has_interpolation(value: str) -> bool:
 
 
 def resolve(value: str, fields: dict[str, str] | None = None) -> str | int | None:
-    # ── 1. Чистый генератор ${NAME} ───────────────────────────────────────────
+    """
+    Разрешает:
+    - ${GENERATOR} — встроенные генераторы
+    - {field-name} — ссылки на поля пользовательского ввода
+    - {project_path} — специальная переменная с путём к проекту
+    """
     m = _EXPR_RE.match(value)
     if m:
         name = m.group(1).upper()
         fn = _REGISTRY.get(name)
         if fn is None:
             return value
-        return fn()  # Возвращаем результат как есть (int или str)
-
-    # ── 2. Смешанная строка ────────────────────────────────────────────────────
-    # Если в строке есть хоть что-то еще, кроме генератора,
-    # результат ВСЕГДА будет строкой (так как мы конкатенируем текст)
+        return fn()
 
     has_gen = _GEN_PART_RE.search(value)
     has_field = _INTERP_PART_RE.search(value)
@@ -143,22 +144,23 @@ def resolve(value: str, fields: dict[str, str] | None = None) -> str | int | Non
     if has_gen or has_field:
         resolved_fields = fields or {}
 
-        # Заменяем генераторы
         def _sub_gen_to_str(match: re.Match) -> str:
             name = match.group(1).upper()
             fn = _REGISTRY.get(name)
-            # Если генератор не найден, оставляем ${NAME} как текст
             return str(fn()) if fn else match.group(0)
 
         step1 = _GEN_PART_RE.sub(_sub_gen_to_str, value)
 
-        # Заменяем поля
-        result = _INTERP_PART_RE.sub(lambda m: to_str(resolved_fields.get(m.group(1), "")), step1)
+        def _sub_interp(match: re.Match) -> str:
+            key = match.group(1)
+            if key == "project_path":
+                return str(resolved_fields.get("_project_path", ""))
+            return to_str(resolved_fields.get(key, ""))
 
-        # Если после всех замен строка пуста, возвращаем None
+        result = _INTERP_PART_RE.sub(_sub_interp, step1)
+
         return result if result else None
 
-    # ── 3. Простой литерал ────────────────────────────────────────────────────
     return value
 
 

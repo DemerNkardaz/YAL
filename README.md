@@ -309,8 +309,19 @@ applies them to target files in the new project.
 ```yaml
 meta:
   yal-min-version: '0.1.1'
-  post-commands: ['npm install'] # run after project is created
   exclude: ['examples/'] # paths not copied into the project
+
+actions:
+  pre:
+    - cmd: echo "Preparing project..."
+    - cmd: mkdir -p .temp
+  post:
+    - cmd: git init --initial-branch=main
+    - cmd: npm install
+      if: use-npm
+    - cmd: code "{project_path}"
+      if: open-in-code
+      os: windows
 
 fields:
   - id: project-name
@@ -327,6 +338,14 @@ fields:
     options: ['MIT', 'Apache-2.0', 'GPL-3.0']
     default: MIT
 
+  - id: use-npm
+    type: boolean
+    default: false
+
+  - id: open-in-code
+    type: boolean
+    default: false
+
 messages:
   project-name:
     prompt: Project name
@@ -335,20 +354,92 @@ messages:
     placeholder: Your Name
   license:
     prompt: License
+  use-npm:
+    prompt: Install npm dependencies?
+  open-in-code:
+    prompt: Open project in VS Code?
 
   ru:
     project-name:
       prompt: Название проекта
     author:
       prompt: Имя автора
+    use-npm:
+      prompt: Установить npm зависимости?
+    open-in-code:
+      prompt: Открыть проект в VS Code?
 ```
+
+### Actions
+
+The `actions` section defines commands to run before and after project creation.
+Commands support conditional execution and OS-specific filtering.
+
+**Structure:**
+
+```yaml
+actions:
+  pre:
+    - cmd: echo "Starting..."
+    - cmd: mkdir -p temp
+  post:
+    - cmd: git init --initial-branch=main
+    - cmd: npm install
+      if: use-npm
+    - cmd: code "{project_path}"
+      if: open-in-code
+      os: windows
+```
+
+**Fields:**
+
+| Field  | Description                                                     |
+| ------ | --------------------------------------------------------------- |
+| `pre`  | Commands executed before interactive field collection           |
+| `post` | Commands executed after project creation                        |
+| `cmd`  | The command to run (supports `{field}` interpolation)           |
+| `if`   | Condition expression (same syntax as `show-if`)                 |
+| `os`   | Restrict command to specific OS: `windows`, `linux`, or `macos` |
+
+**Conditional commands:**
+
+```yaml
+actions:
+  post:
+    - cmd: npm install
+      if: use-npm
+    - cmd: pip install -r requirements.txt
+      if: use-python
+    - cmd: code "{project_path}"
+      if: open-in-code and project-name != ""
+```
+
+**OS-specific commands:**
+
+```yaml
+actions:
+  post:
+    - cmd: timeout /t 1 /nobreak > nul && code "{project_path}"
+      os: windows
+      if: open-in-code
+    - cmd: sleep 1 && code "{project_path}"
+      os: linux
+      if: open-in-code
+    - cmd: sleep 1 && code "{project_path}"
+      os: macos
+      if: open-in-code
+```
+
+**Special variables:**
+
+- `{project_path}` — absolute path to the created project folder
 
 ### Fields
 
 Each `[[fields]]` entry supports:
 
 | Field            | Description                                                                                                                                                                                  |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --- |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `id`             | Unique identifier, used as key in mappings and message lookups                                                                                                                               |
 | `type`           | Input type: `text`, `number`, `list`, `select`, `multi-select`, or `boolean` (see Field types below)                                                                                         |
 | `required`       | If `true`, the user must provide a non-empty value (for `multi-select`, at least one item)                                                                                                   |
@@ -360,7 +451,7 @@ Each `[[fields]]` entry supports:
 | `pattern`        | Regular expression for `text` field validation (Python regex syntax, uses `re.fullmatch`)                                                                                                    |
 | `allow-custom`   | If `true`, allows entering custom values in `select` and `multi-select` fields                                                                                                               |
 | `min-cols`       | Minimum number of columns in interactive picker (default: 1). Only effective when terminal is wide enough                                                                                    |
-| `show-if`        | Conditional expression to show/hide the field based on other fields (see Conditional fields below)                                                                                           |     |
+| `show-if`        | Conditional expression to show/hide the field based on other fields (see Conditional fields below)                                                                                           |
 
 ### Field types
 
@@ -639,9 +730,25 @@ yal new vue:minimal
 ```yaml
 meta:
   yal-min-version: '0.1.3'
-  post-commands:
-    - git init
-    - pip install -r requirements.txt
+
+actions:
+  pre:
+    - cmd: echo "Initializing project..."
+  post:
+    - cmd: git init --initial-branch=main
+    - cmd: pip install -r requirements.txt
+      if: use-python
+    - cmd: npm install
+      if: use-npm
+    - cmd: code "{project_path}"
+      if: open-in-code
+      os: windows
+    - cmd: sleep 1 && code "{project_path}"
+      if: open-in-code
+      os: linux
+    - cmd: sleep 1 && code "{project_path}"
+      if: open-in-code
+      os: macos
 
 fields:
   - id: book-title
@@ -676,6 +783,18 @@ fields:
   - id: use-typst
     type: boolean
     default: true
+
+  - id: use-python
+    type: boolean
+    default: false
+
+  - id: use-npm
+    type: boolean
+    default: false
+
+  - id: open-in-code
+    type: boolean
+    default: false
 
   - id: output-format
     type: select
@@ -749,9 +868,15 @@ messages:
         bibliography: References and sources
   use-typst:
     prompt: Use Typst for typesetting
+  use-python:
+    prompt: Use Python dependencies?
+  use-npm:
+    prompt: Use npm dependencies?
+  open-in-code:
+    prompt: Open project in VS Code?
   output-format:
     prompt: Output format
-
+  
   ru:
     book-title:
       prompt: Название книги
@@ -778,7 +903,7 @@ messages:
         illustrations: Иллюстрации
         index: Индекс
         bibliography: Библиография
-
+        
         label:
           glossary: Термины и определения
           illustrations: Изображения и диаграммы
@@ -786,6 +911,12 @@ messages:
           bibliography: Ссылки и источники
     use-typst:
       prompt: Использовать Typst для вёрстки
+    use-python:
+      prompt: Использовать Python зависимости?
+    use-npm:
+      prompt: Использовать npm зависимости?
+    open-in-code:
+      prompt: Открыть проект в VS Code?
     output-format:
       prompt: Формат вывода
 ```
